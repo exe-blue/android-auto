@@ -173,6 +173,30 @@
 | Grafana | 3001 |
 | Prometheus | 9090 |
 
+### 인증 API
+
+| 엔드포인트 | 설명 |
+|-----------|------|
+| POST /api/auth/login | 아이디/비밀번호 로그인, JWT 토큰 발급 |
+| GET /api/auth/me | 현재 사용자 정보 조회 |
+| POST /api/auth/change-password | 비밀번호 변경 |
+
+### 검색 요청 API
+
+| 엔드포인트 | 설명 |
+|-----------|------|
+| POST /api/search-requests | 검색 요청 생성 (키워드, 제목, URL) |
+| GET /api/search-requests/:id | 검색 요청 상태 조회 |
+| GET /api/search-requests | 내 검색 요청 목록 |
+
+### 스케줄러 API
+
+| 엔드포인트 | 설명 |
+|-----------|------|
+| GET /api/scheduler/status | 스케줄러 상태 조회 |
+| POST /api/scheduler/start | 스케줄러 시작 (관리자) |
+| POST /api/scheduler/stop | 스케줄러 중지 (관리자) |
+
 ### 워커PC
 
 | 서비스 | 포트 범위 |
@@ -281,6 +305,52 @@ class CommandRotation {
   }
 }
 ```
+
+---
+
+## 검색 요청 시스템
+
+### 사용자 입력 필드
+
+| 필드 | 설명 | 예시 |
+|------|------|------|
+| keyword | 검색 키워드 | "맛집 추천" |
+| title | 콘텐츠 제목 | "강남역 숨은 맛집 TOP 10" |
+| url | 외부 URL (폴백용) | "https://example.com/content/123" |
+
+### 3단계 검색 로직
+
+```
+1단계: 키워드 검색 (1시간 이내 필터)
+  ↓ 못 찾으면
+2단계: 제목 검색
+  ↓ 못 찾으면
+3단계: URL 직접 이동
+```
+
+### 버퍼 스케줄러
+
+**평상시 (검색 요청 없음):**
+```
+자동화1 → 자동화2 → 자동화3 → 자동화1 → ...
+```
+
+**검색 요청 있을 때:**
+```
+요청1 → 자동화1 → 요청2 → 자동화2 → 요청3 → 자동화3 → ...
+```
+
+자동화가 **버퍼 역할**을 하여 요청 간 간격을 유지하면서 모든 요청을 처리함.
+
+### 검색 요청 상태 전이
+
+```
+pending → processing → found / not_found / failed
+                ↓
+       (keyword → title → url)
+```
+
+자세한 내용은 [SEARCH_REQUEST_FLOW.md](./SEARCH_REQUEST_FLOW.md) 참조.
 
 ---
 
