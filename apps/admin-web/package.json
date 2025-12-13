@@ -1,0 +1,14 @@
+{
+  "name": "@android-auto/admin-web",
+  "version": "1.0.0",
+  "description": "Android 자동화 제어 센터 웹앱",
+  "type": "module",
+  "scripts": {
+    "dev": "python3 -m http.server 8080",
+    "serve": "python3 -m http.server 8080"
+  },
+  "dependencies": {
+    "@awesome.me/webawesome": "3.0.0"
+  }
+}
+

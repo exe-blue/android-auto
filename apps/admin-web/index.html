@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Android 자동화 제어 센터</title>
+  
+  <!-- Web Awesome CDN -->
+  <script src="https://kit.webawesome.com/338bd0ebe3844a80.js" crossorigin="anonymous"></script>
+  
+  <!-- Web Awesome Local (if CDN fails) -->
+  <link rel="stylesheet" href="/dist/styles/webawesome.css">
+  <script type="module" src="/dist/webawesome.loader.js" data-webawesome="/dist"></script>
+  
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <!-- 로그인 화면 -->
+  <div id="login-screen" class="screen active">
+    <div class="login-container">
+      <wa-card class="login-card">
+        <div class="login-header">
+          <wa-icon name="fa-solid fa-mobile-screen-button" size="3rem" class="login-icon"></wa-icon>
+          <h1>Android 자동화<br>제어 센터</h1>
+        </div>
+        
+        <form id="login-form">
+          <wa-input 
+            name="username" 
+            label="아이디" 
+            placeholder="아이디를 입력하세요"
+            required
+            clearable>
+            <wa-icon name="fa-solid fa-user" slot="prefix"></wa-icon>
+          </wa-input>
+          
+          <wa-input 
+            name="password" 
+            type="password" 
+            label="비밀번호" 
+            placeholder="비밀번호를 입력하세요"
+            required
+            password-toggle>
+            <wa-icon name="fa-solid fa-lock" slot="prefix"></wa-icon>
+          </wa-input>
+          
+          <wa-button type="submit" variant="primary" size="large" class="login-button">
+            <wa-icon name="fa-solid fa-sign-in-alt" slot="prefix"></wa-icon>
+            로그인
+          </wa-button>
+        </form>
+        
+        <wa-callout id="login-error" variant="danger" style="display: none; margin-top: 1rem;"></wa-callout>
+      </wa-card>
+    </div>
+  </div>
+
+  <!-- 메인 대시보드 -->
+  <div id="dashboard-screen" class="screen">
+    <wa-page class="admin-page">
+      <!-- 헤더 -->
+      <div slot="header" class="page-header">
+        <div class="header-left">
+          <wa-icon name="fa-solid fa-mobile-screen-button" size="1.5rem"></wa-icon>
+          <h2>Android 자동화 제어 센터</h2>
+        </div>
+        <div class="header-right">
+          <wa-badge id="user-badge" variant="primary"></wa-badge>
+          <wa-button variant="default" size="small" id="logout-btn">
+            <wa-icon name="fa-solid fa-sign-out-alt" slot="prefix"></wa-icon>
+            로그아웃
+          </wa-button>
+        </div>
+      </div>
+
+      <!-- 탭 네비게이션 -->
+      <wa-tab-group placement="top">
+        <wa-tab slot="nav" panel="dashboard">
+          <wa-icon name="fa-solid fa-chart-line" slot="prefix"></wa-icon>
+          대시보드
+        </wa-tab>
+        <wa-tab slot="nav" panel="search-request">
+          <wa-icon name="fa-solid fa-search" slot="prefix"></wa-icon>
+          검색 요청 등록
+        </wa-tab>
+        <wa-tab slot="nav" panel="requests-list">
+          <wa-icon name="fa-solid fa-list" slot="prefix"></wa-icon>
+          요청 목록
+        </wa-tab>
+        <wa-tab slot="nav" panel="settings" id="settings-tab" style="display: none;">
+          <wa-icon name="fa-solid fa-cog" slot="prefix"></wa-icon>
+          설정
+        </wa-tab>
+
+        <!-- 대시보드 패널 -->
+        <wa-tab-panel name="dashboard">
+          <div class="dashboard-grid">
+            <!-- 통계 카드 -->
+            <wa-card class="stat-card">
+              <div class="stat-header">
+                <wa-icon name="fa-solid fa-mobile-alt" class="stat-icon"></wa-icon>
+                <div>
+                  <div class="stat-value" id="stats-online-devices">-</div>
+                  <div class="stat-label">온라인 기기</div>
+                </div>
+              </div>
+            </wa-card>
+
+            <wa-card class="stat-card">
+              <div class="stat-header">
+                <wa-icon name="fa-solid fa-tasks" class="stat-icon"></wa-icon>
+                <div>
+                  <div class="stat-value" id="stats-pending-requests">-</div>
+                  <div class="stat-label">대기 중인 요청</div>
+                </div>
+              </div>
+            </wa-card>
+
+            <wa-card class="stat-card">
+              <div class="stat-header">
+                <wa-icon name="fa-solid fa-check-circle" class="stat-icon"></wa-icon>
+                <div>
+                  <div class="stat-value" id="stats-completed-jobs">-</div>
+                  <div class="stat-label">완료된 작업</div>
+                </div>
+              </div>
+            </wa-card>
+
+            <wa-card class="stat-card">
+              <div class="stat-header">
+                <wa-icon name="fa-solid fa-clock" class="stat-icon"></wa-icon>
+                <div>
+                  <div class="stat-value" id="stats-current-job">-</div>
+                  <div class="stat-label">현재 작업</div>
+                </div>
+              </div>
+            </wa-card>
+
+            <!-- 스케줄러 상태 -->
+            <wa-card class="scheduler-card">
+              <div slot="header">
+                <h3>스케줄러 상태</h3>
+              </div>
+              
+              <div class="scheduler-info">
+                <div class="scheduler-item">
+                  <span class="label">상태:</span>
+                  <wa-badge id="scheduler-status-badge" variant="default">-</wa-badge>
+                </div>
+                <div class="scheduler-item">
+                  <span class="label">대기 중인 요청:</span>
+                  <span id="scheduler-pending-count">-</span>
+                </div>
+                <div class="scheduler-item">
+                  <span class="label">현재 작업:</span>
+                  <span id="scheduler-current-job">-</span>
+                </div>
+                <div class="scheduler-item">
+                  <span class="label">자동화 로테이션:</span>
+                  <span id="scheduler-rotation">-</span>
+                </div>
+              </div>
+
+              <div slot="footer" class="scheduler-actions">
+                <wa-button variant="success" size="small" id="scheduler-start-btn">
+                  <wa-icon name="fa-solid fa-play" slot="prefix"></wa-icon>
+                  시작
+                </wa-button>
+                <wa-button variant="danger" size="small" id="scheduler-stop-btn">
+                  <wa-icon name="fa-solid fa-stop" slot="prefix"></wa-icon>
+                  중지
+                </wa-button>
+                <wa-button variant="default" size="small" id="scheduler-refresh-btn">
+                  <wa-icon name="fa-solid fa-sync-alt" slot="prefix"></wa-icon>
+                  새로고침
+                </wa-button>
+              </div>
+            </wa-card>
+          </div>
+        </wa-tab-panel>
+
+        <!-- 검색 요청 등록 패널 -->
+        <wa-tab-panel name="search-request">
+          <wa-card class="request-form-card">
+            <div slot="header">
+              <h3>검색 요청 등록</h3>
+              <p class="subtitle">키워드, 제목, 주소를 입력하여 콘텐츠 검색을 요청하세요</p>
+            </div>
+
+            <form id="search-request-form">
+              <wa-input 
+                name="keyword" 
+                label="검색 키워드" 
+                placeholder="예: 맛집 추천"
+                required
+                help-text="앱에서 검색할 키워드를 입력하세요">
+                <wa-icon name="fa-solid fa-key" slot="prefix"></wa-icon>
+              </wa-input>
+
+              <wa-input 
+                name="title" 
+                label="콘텐츠 제목" 
+                placeholder="예: 강남역 숨은 맛집 TOP 10"
+                required
+                help-text="찾고자 하는 콘텐츠의 정확한 제목을 입력하세요">
+                <wa-icon name="fa-solid fa-heading" slot="prefix"></wa-icon>
+              </wa-input>
+
+              <wa-input 
+                name="url" 
+                type="url" 
+                label="외부 URL" 
+                placeholder="https://example.com/content/123"
+                required
+                help-text="검색 실패 시 이동할 외부 링크를 입력하세요">
+                <wa-icon name="fa-solid fa-link" slot="prefix"></wa-icon>
+              </wa-input>
+
+              <wa-input 
+                name="priority" 
+                type="number" 
+                label="우선순위" 
+                value="10"
+                min="1"
+                max="100"
+                help-text="숫자가 클수록 우선 처리됩니다 (기본값: 10)">
+                <wa-icon name="fa-solid fa-sort-numeric-up" slot="prefix"></wa-icon>
+              </wa-input>
+
+              <div class="form-actions">
+                <wa-button type="submit" variant="primary" size="large">
+                  <wa-icon name="fa-solid fa-paper-plane" slot="prefix"></wa-icon>
+                  요청 등록
+                </wa-button>
+                <wa-button type="reset" variant="default" size="large">
+                  초기화
+                </wa-button>
+              </div>
+            </form>
+
+            <wa-callout id="request-success" variant="success" style="display: none; margin-top: 1rem;"></wa-callout>
+            <wa-callout id="request-error" variant="danger" style="display: none; margin-top: 1rem;"></wa-callout>
+          </wa-card>
+        </wa-tab-panel>
+
+        <!-- 요청 목록 패널 -->
+        <wa-tab-panel name="requests-list">
+          <wa-card>
+            <div slot="header" class="list-header">
+              <h3>검색 요청 목록</h3>
+              <wa-button variant="default" size="small" id="refresh-list-btn">
+                <wa-icon name="fa-solid fa-sync-alt" slot="prefix"></wa-icon>
+                새로고침
+              </wa-button>
+            </div>
+
+            <div id="requests-list-container">
+              <wa-spinner></wa-spinner>
+            </div>
+          </wa-card>
+        </wa-tab-panel>
+
+        <!-- 설정 패널 (관리자만) -->
+        <wa-tab-panel name="settings">
+          <wa-card>
+            <div slot="header">
+              <h3>설정</h3>
+            </div>
+            
+            <wa-divider></wa-divider>
+            
+            <h4>비밀번호 변경</h4>
+            <form id="change-password-form">
+              <wa-input 
+                name="oldPassword" 
+                type="password" 
+                label="현재 비밀번호" 
+                required
+                password-toggle>
+              </wa-input>
+              
+              <wa-input 
+                name="newPassword" 
+                type="password" 
+                label="새 비밀번호" 
+                required
+                password-toggle>
+              </wa-input>
+              
+              <wa-input 
+                name="confirmPassword" 
+                type="password" 
+                label="새 비밀번호 확인" 
+                required
+                password-toggle>
+              </wa-input>
+              
+              <wa-button type="submit" variant="primary">
+                비밀번호 변경
+              </wa-button>
+            </form>
+          </wa-card>
+        </wa-tab-panel>
+      </wa-tab-group>
+    </wa-page>
+  </div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
+

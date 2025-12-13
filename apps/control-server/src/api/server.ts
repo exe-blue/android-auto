@@ -5,6 +5,7 @@
 
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
+import path from 'path';
 import { DeviceManager } from '../services/deviceManager';
 import { TaskExecutor, CommandType } from '../services/taskExecutor';
 import { AuthService, TokenPayload } from '../services/authService';
@@ -12,7 +13,13 @@ import { SearchRequestService } from '../services/searchRequestService';
 import { BufferScheduler } from '../services/bufferScheduler';
 
 const app = express();
-app.use(cors());
+
+// CORS 설정
+app.use(cors({
+  origin: process.env.ALLOWED_ORIGINS?.split(',') || '*',
+  credentials: true
+}));
+
 app.use(express.json());
 
 // 환경 변수
@@ -79,8 +86,22 @@ const jwtAuth = (req: Request, res: Response, next: NextFunction): void => {
   next();
 };
 
-// 모든 API에 VPN 인증 적용
-app.use('/api', vpnAuth);
+// 정적 파일 서빙 (Web Awesome dist, admin-web)
+const distPath = path.join(__dirname, '../../../dist');
+const adminWebPath = path.join(__dirname, '../../admin-web');
+
+app.use('/dist', express.static(distPath));
+app.use(express.static(adminWebPath));
+
+// 루트 경로에서 admin-web index.html 서빙
+app.get('/', (req: Request, res: Response) => {
+  res.sendFile(path.join(adminWebPath, 'index.html'));
+});
+
+// 모든 API에 VPN 인증 적용 (개발 환경에서는 스킵)
+if (process.env.NODE_ENV !== 'development') {
+  app.use('/api', vpnAuth);
+}
 
 // ============================================
 // 인증 API
@@ -452,6 +473,7 @@ app.listen(PORT, () => {
   console.log(`=================================`);
   console.log(`\n기본 관리자: admin / admin1234`);
   console.log(`로그인 후 비밀번호를 변경해주세요!\n`);
+  console.log(`웹 대시보드: http://localhost:${PORT}\n`);
 });
 
 // 종료 처리
