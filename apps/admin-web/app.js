@@ -138,10 +138,9 @@ function showScreen(screenId) {
 function showAlert(alertId, message, variant = 'info') {
   const alert = document.getElementById(alertId);
   if (alert) {
-    alert.textContent = message;
+    alert.innerHTML = message;
     alert.variant = variant;
     alert.style.display = 'block';
-    alert.show();
   }
 }
 
@@ -149,7 +148,6 @@ function hideAlert(alertId) {
   const alert = document.getElementById(alertId);
   if (alert) {
     alert.style.display = 'none';
-    alert.hide();
   }
 }
 
@@ -349,7 +347,7 @@ async function loadRequestsList() {
       </div>
     `).join('');
   } catch (error) {
-    container.innerHTML = `<wa-alert variant="danger">목록 조회 실패: ${error.message}</wa-alert>`;
+    container.innerHTML = `<wa-callout variant="danger">목록 조회 실패: ${error.message}</wa-callout>`;
   }
 }
 

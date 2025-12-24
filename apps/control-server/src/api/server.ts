@@ -6,13 +6,16 @@
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import path from 'path';
-import { DeviceManager } from '../services/deviceManager';
-import { TaskExecutor, CommandType } from '../services/taskExecutor';
+import http from 'http';
+import { WebSocketServer, WebSocket } from 'ws';
+import { DeviceManager, Device } from '../services/deviceManager';
+import { TaskExecutor, CommandType, ExecutionResult } from '../services/taskExecutor';
 import { AuthService, TokenPayload } from '../services/authService';
-import { SearchRequestService } from '../services/searchRequestService';
+import { SearchRequestService, SearchRequest } from '../services/searchRequestService';
 import { BufferScheduler } from '../services/bufferScheduler';
 
 const app = express();
+const server = http.createServer(app);
 
 // CORS 설정
 app.use(cors({
@@ -33,6 +36,185 @@ const taskExecutor = new TaskExecutor(REDIS_URL, deviceManager);
 const authService = new AuthService(REDIS_URL);
 const searchRequestService = new SearchRequestService(REDIS_URL);
 const scheduler = new BufferScheduler(REDIS_URL, deviceManager, taskExecutor, searchRequestService);
+
+// WebSocket 서버
+const wss = new WebSocketServer({ server, path: '/ws' });
+
+// 워커 연결 관리
+interface WorkerConnection {
+  workerId: number;
+  ws: WebSocket;
+  lastHeartbeat: Date;
+  devices: Device[];
+}
+const workerConnections = new Map<number, WorkerConnection>();
+
+// WebSocket 연결 처리
+wss.on('connection', (ws: WebSocket) => {
+  console.log('WebSocket 연결됨');
+
+  let workerId: number | null = null;
+
+  ws.on('message', async (data: string) => {
+    try {
+      const message = JSON.parse(data.toString());
+
+      switch (message.type) {
+        case 'registered':
+          // 워커 등록
+          workerId = message.workerId;
+          const devices: Device[] = (message.devices || []).map((d: any) => ({
+            id: `device_${workerId}_${d.serial}`,
+            deviceId: d.serial,
+            workerId: workerId!,
+            ipAddress: d.serial.split(':')[0],
+            status: 'idle' as const,
+            lastSeen: new Date(),
+            errorCount: 0
+          }));
+
+          // 기기 등록
+          for (const device of devices) {
+            await deviceManager.registerDevice(device);
+          }
+
+          workerConnections.set(workerId, {
+            workerId,
+            ws,
+            lastHeartbeat: new Date(),
+            devices
+          });
+
+          console.log(`워커 #${workerId} 등록됨 (${devices.length}대)`);
+          break;
+
+        case 'heartbeat':
+          // 헬스체크
+          if (message.workerId) {
+            const conn = workerConnections.get(message.workerId);
+            if (conn) {
+              conn.lastHeartbeat = new Date();
+              // 기기 정보 업데이트
+              if (message.devices) {
+                conn.devices = (message.devices || []).map((d: any) => ({
+                  id: `device_${message.workerId}_${d.serial}`,
+                  deviceId: d.serial,
+                  workerId: message.workerId,
+                  ipAddress: d.serial.split(':')[0],
+                  status: 'idle' as const,
+                  lastSeen: new Date(),
+                  errorCount: 0
+                }));
+              }
+            }
+          }
+          break;
+
+        case 'result':
+          // 작업 결과 수신
+          if (message.taskId && message.results) {
+            await taskExecutor.handleTaskResults(message.taskId, message.results);
+          }
+          break;
+
+        case 'search_result':
+          // 검색 결과 수신
+          if (message.requestId && message.result) {
+            const result = {
+              requestId: message.requestId,
+              deviceId: message.result.deviceId,
+              phase: message.result.phase as 'keyword' | 'title' | 'url',
+              found: message.result.found,
+              durationMs: message.result.durationMs || 0,
+              errorMessage: message.result.errorMessage
+            };
+            
+            await searchRequestService.updateResult(result);
+            
+            // 찾았으면 처리 완료
+            if (result.found) {
+              console.log(`검색 성공: ${message.requestId} (${result.phase} 단계, 기기: ${result.deviceId})`);
+            }
+          }
+          break;
+
+        case 'pong':
+          // ping 응답
+          break;
+
+        default:
+          console.log('알 수 없는 메시지:', message);
+      }
+    } catch (error) {
+      console.error('WebSocket 메시지 처리 오류:', error);
+    }
+  });
+
+  ws.on('close', () => {
+    if (workerId !== null) {
+      console.log(`워커 #${workerId} 연결 끊김`);
+      workerConnections.delete(workerId);
+    }
+  });
+
+  ws.on('error', (error) => {
+    console.error('WebSocket 오류:', error);
+  });
+});
+
+// 워커에게 명령 전송 헬퍼 함수
+function sendToWorker(workerId: number, message: any): boolean {
+  const conn = workerConnections.get(workerId);
+  if (conn && conn.ws.readyState === WebSocket.OPEN) {
+    conn.ws.send(JSON.stringify(message));
+    return true;
+  }
+  return false;
+}
+
+// 검색 요청 전송 함수
+async function sendSearchRequestToWorkers(
+  requestId: string,
+  searchInput: { keyword: string; title: string; url: string },
+  deviceIds: string[]
+): Promise<void> {
+  const allDevices = await deviceManager.getAvailableDevices();
+  
+  // 워커별로 그룹화
+  const workerGroups = new Map<number, string[]>();
+  for (const deviceId of deviceIds) {
+    const device = allDevices.find(d => d.id === deviceId);
+    if (device) {
+      if (!workerGroups.has(device.workerId)) {
+        workerGroups.set(device.workerId, []);
+      }
+      workerGroups.get(device.workerId)!.push(device.deviceId);
+    }
+  }
+
+  // 각 워커에 검색 요청 전송
+  for (const [workerId, deviceSerials] of workerGroups) {
+    const sent = sendToWorker(workerId, {
+      type: 'execute_search',
+      requestId,
+      searchInput,
+      deviceSerials
+    });
+
+    if (sent) {
+      // 결과는 워커에서 'search_result' 메시지로 받음
+      console.log(`검색 요청 전송: ${requestId} → 워커 #${workerId} (${deviceSerials.length}대)`);
+    } else {
+      console.warn(`워커 #${workerId}에 검색 요청 전송 실패: ${requestId}`);
+    }
+  }
+}
+
+// TaskExecutor에 워커 전송 함수 제공
+taskExecutor.setWorkerSender(sendToWorker);
+
+// BufferScheduler에 검색 요청 전송 함수 제공
+scheduler.setSearchRequestSender(sendSearchRequestToWorkers);
 
 // Request에 user 정보 추가
 declare global {
@@ -464,10 +646,11 @@ app.post('/api/scheduler/interval', jwtAuth, async (req: Request, res: Response)
 // 서버 시작
 // ============================================
 
-app.listen(PORT, () => {
+server.listen(PORT, () => {
   console.log(`=================================`);
   console.log(`  Android 자동화 제어서버`);
-  console.log(`  포트: ${PORT}`);
+  console.log(`  HTTP 포트: ${PORT}`);
+  console.log(`  WebSocket: ws://localhost:${PORT}/ws`);
   console.log(`  VPN 서브넷: ${VPN_SUBNET}`);
   console.log(`  Redis: ${REDIS_URL}`);
   console.log(`=================================`);

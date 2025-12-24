@@ -65,6 +65,9 @@ export class BufferScheduler extends EventEmitter {
   // 실행 간격 (ms)
   private jobInterval: number = 5000;
 
+  // 검색 요청 전송 함수
+  private searchRequestSender: ((requestId: string, searchInput: { keyword: string; title: string; url: string }, deviceIds: string[]) => Promise<any>) | null = null;
+
   constructor(
     redisUrl: string,
     deviceManager: DeviceManager,
@@ -76,6 +79,13 @@ export class BufferScheduler extends EventEmitter {
     this.deviceManager = deviceManager;
     this.taskExecutor = taskExecutor;
     this.searchRequestService = searchRequestService;
+  }
+
+  /**
+   * 검색 요청 전송 함수 설정
+   */
+  setSearchRequestSender(sender: (requestId: string, searchInput: { keyword: string; title: string; url: string }, deviceIds: string[]) => Promise<any>): void {
+    this.searchRequestSender = sender;
   }
 
   /**
@@ -255,8 +265,21 @@ export class BufferScheduler extends EventEmitter {
     // 처리 시작 표시
     await this.searchRequestService.startProcessing(request.id, job.assignedDevices);
 
-    // 워커에 검색 명령 전송 (실제 구현은 WebSocket 통신)
-    // 여기서는 시뮬레이션
+    // 워커에 검색 명령 전송
+    if (this.searchRequestSender) {
+      await this.searchRequestSender(request.id, {
+        keyword: request.keyword,
+        title: request.title,
+        url: request.url
+      }, job.assignedDevices);
+      
+      // 결과는 WebSocket을 통해 비동기로 수신됨
+      // simulateSearchExecution은 제거하고 실제 결과 대기
+      console.log(`검색 요청 전송 완료: ${request.id}`);
+      return;
+    }
+
+    // 폴백: 시뮬레이션 (워커 연결이 없을 때)
     const results = await this.simulateSearchExecution(request, job.assignedDevices);
 
     // 결과 처리

@@ -18,6 +18,7 @@ export interface SearchConfig {
   timeFilterCoords?: { x: number; y: number };   // 1시간 필터 좌표 (선택)
   maxScrolls: number;         // 최대 스크롤 횟수
   scrollDelay: number;        // 스크롤 간 대기 시간 (ms)
+  simulationMode?: boolean;   // 시뮬레이션 모드 (기기 없이 테스트)
 }
 
 // 검색 입력
@@ -53,6 +54,11 @@ export class SearchCommand {
    */
   async execute(serial: string, input: SearchInput): Promise<SearchExecutionResult> {
     const startTime = Date.now();
+
+    // 시뮬레이션 모드
+    if (this.config.simulationMode) {
+      return this.executeSimulation(serial, input, startTime);
+    }
 
     try {
       // 화면 켜기 및 잠금 해제
@@ -247,6 +253,67 @@ export class SearchCommand {
     return false;
   }
 
+  /**
+   * 시뮬레이션 모드 실행 (기기 없이 테스트)
+   */
+  private async executeSimulation(
+    serial: string, 
+    input: SearchInput, 
+    startTime: number
+  ): Promise<SearchExecutionResult> {
+    console.log(`[${serial}] 시뮬레이션 모드: 검색 시작`);
+
+    // 1단계: 키워드 검색 시뮬레이션
+    await this.sleep(1000);
+    console.log(`[${serial}] 1단계: 키워드 검색 - "${input.keyword}"`);
+    
+    // 30% 확률로 1단계에서 찾음
+    if (Math.random() > 0.7) {
+      await this.sleep(500);
+      return {
+        found: true,
+        phase: 'keyword',
+        durationMs: Date.now() - startTime
+      };
+    }
+
+    // 2단계: 제목 검색 시뮬레이션
+    await this.sleep(1000);
+    console.log(`[${serial}] 2단계: 제목 검색 - "${input.title}"`);
+    
+    // 40% 확률로 2단계에서 찾음
+    if (Math.random() > 0.6) {
+      await this.sleep(500);
+      return {
+        found: true,
+        phase: 'title',
+        durationMs: Date.now() - startTime
+      };
+    }
+
+    // 3단계: URL 이동 시뮬레이션
+    await this.sleep(1000);
+    console.log(`[${serial}] 3단계: URL 이동 - "${input.url}"`);
+    
+    // 50% 확률로 3단계에서 성공
+    if (Math.random() > 0.5) {
+      await this.sleep(500);
+      return {
+        found: true,
+        phase: 'url',
+        durationMs: Date.now() - startTime
+      };
+    }
+
+    // 모든 단계 실패
+    return {
+      found: false,
+      phase: 'url',
+      durationMs: Date.now() - startTime,
+      errorMessage: '시뮬레이션: 모든 검색 단계 실패'
+    };
+  }
+
   private sleep(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
   }
@@ -262,6 +329,7 @@ export const defaultSearchConfig: SearchConfig = {
   resultAreaCoords: { x: 540, y: 600 },
   timeFilterCoords: { x: 900, y: 300 },
   maxScrolls: 10,
-  scrollDelay: 1500
+  scrollDelay: 1500,
+  simulationMode: process.env.SIMULATION_MODE === 'true' || false // 환경 변수로 제어
 };
 

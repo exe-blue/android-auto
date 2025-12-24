@@ -6,6 +6,7 @@
 import WebSocket from 'ws';
 import { AdbController, AdbDevice } from './adbController';
 import { CommandExecutor, CommandType, ExecutionResult } from './commandExecutor';
+import { SearchCommand, SearchInput, SearchExecutionResult } from './searchCommand';
 
 // 설정 인터페이스
 export interface WorkerConfig {
@@ -19,19 +20,31 @@ export interface WorkerConfig {
 
 // 제어서버 메시지 타입
 interface ServerMessage {
-  type: 'execute' | 'status' | 'ping' | 'register';
+  type: 'execute' | 'execute_search' | 'status' | 'ping' | 'register';
   taskId?: string;
+  requestId?: string;
   commandType?: CommandType;
   devices?: string[];
+  deviceSerials?: string[];
+  searchInput?: SearchInput;
   data?: unknown;
 }
 
 // 응답 메시지 타입
 interface WorkerResponse {
-  type: 'result' | 'status' | 'pong' | 'registered' | 'heartbeat';
+  type: 'result' | 'search_result' | 'status' | 'pong' | 'registered' | 'heartbeat';
   workerId: number;
   taskId?: string;
+  requestId?: string;
   results?: ExecutionResult[];
+  result?: {
+    requestId: string;
+    deviceId: string;
+    phase: string;
+    found: boolean;
+    durationMs: number;
+    errorMessage?: string;
+  };
   devices?: AdbDevice[];
   stats?: WorkerStats;
 }
@@ -49,6 +62,7 @@ export class WorkerAgent {
   private config: WorkerConfig;
   private adb: AdbController;
   private executor: CommandExecutor;
+  private searchCommand: SearchCommand | null = null;
   private ws: WebSocket | null = null;
   private devices: Map<string, AdbDevice> = new Map();
   private busyDevices: Set<string> = new Set();
@@ -59,6 +73,14 @@ export class WorkerAgent {
     this.config = config;
     this.adb = new AdbController();
     this.executor = new CommandExecutor(this.adb);
+    
+    // 검색 커맨드 초기화 (기본 설정, 시뮬레이션 모드)
+    // 실제 앱 패키지명/좌표는 환경 변수나 설정 파일에서 로드
+    const { defaultSearchConfig } = require('./searchCommand');
+    // 시뮬레이션 모드는 환경 변수로 제어 (기기 없이 테스트 가능)
+    const config = { ...defaultSearchConfig, simulationMode: process.env.SIMULATION_MODE === 'true' };
+    this.searchCommand = new SearchCommand(this.adb, config);
+    
     this.stats = {
       totalDevices: 0,
       onlineDevices: 0,
@@ -231,6 +253,16 @@ export class WorkerAgent {
         }
         break;
 
+      case 'execute_search':
+        if (message.requestId && message.searchInput && message.deviceSerials) {
+          await this.executeSearch(
+            message.requestId,
+            message.searchInput,
+            message.deviceSerials
+          );
+        }
+        break;
+
       default:
         console.log('알 수 없는 메시지:', message);
     }
@@ -281,6 +313,81 @@ export class WorkerAgent {
     });
 
     console.log(`작업 완료: ${taskId} - 성공: ${results.filter(r => r.success).length}, 실패: ${results.filter(r => !r.success).length}`);
+  }
+
+  /**
+   * 검색 요청 실행
+   */
+  private async executeSearch(
+    requestId: string,
+    searchInput: SearchInput,
+    deviceSerials: string[]
+  ): Promise<void> {
+    console.log(`검색 요청 수신: ${requestId} (${deviceSerials.length}대)`);
+
+    if (!this.searchCommand) {
+      console.warn('검색 커맨드가 초기화되지 않았습니다. 기본 설정으로 초기화합니다.');
+      // 기본 검색 커맨드 생성 (시뮬레이션 모드)
+      const { defaultSearchConfig } = await import('./searchCommand');
+      this.searchCommand = new SearchCommand(this.adb, defaultSearchConfig);
+    }
+
+    // 각 기기에 대해 검색 실행
+    for (const serial of deviceSerials) {
+      // 기기가 사용 중이면 스킵
+      if (this.busyDevices.has(serial)) {
+        console.log(`기기 ${serial}가 사용 중입니다. 스킵합니다.`);
+        continue;
+      }
+
+      this.busyDevices.add(serial);
+
+      try {
+        const result = await this.searchCommand.execute(serial, searchInput);
+        
+        // 결과 전송
+        this.send({
+          type: 'search_result',
+          workerId: this.config.workerId,
+          requestId,
+          result: {
+            requestId,
+            deviceId: serial,
+            phase: result.phase,
+            found: result.found,
+            durationMs: result.durationMs,
+            errorMessage: result.errorMessage
+          }
+        });
+
+        // 찾았으면 다른 기기는 실행하지 않음
+        if (result.found) {
+          console.log(`검색 성공: ${requestId} (기기: ${serial}, 단계: ${result.phase})`);
+          break;
+        }
+      } catch (error) {
+        console.error(`검색 실행 오류: ${requestId} (기기: ${serial})`, error);
+        
+        // 오류 결과 전송
+        this.send({
+          type: 'search_result',
+          workerId: this.config.workerId,
+          requestId,
+          result: {
+            requestId,
+            deviceId: serial,
+            phase: 'keyword',
+            found: false,
+            durationMs: 0,
+            errorMessage: error instanceof Error ? error.message : '알 수 없는 오류'
+          }
+        });
+      } finally {
+        this.busyDevices.delete(serial);
+      }
+    }
+
+    console.log(`검색 요청 처리 완료: ${requestId}`);
   }
 
   /**

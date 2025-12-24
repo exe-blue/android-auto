@@ -39,17 +39,24 @@ export interface ExecutionResult {
   screenshotPath?: string;
 }
 
-// 워커 요청 인터페이스
-interface WorkerRequest {
+// 워커 전송 함수 타입
+export type WorkerSender = (workerId: number, message: any) => boolean;
+
+// 작업 결과 대기 관리
+interface PendingTask {
   taskId: string;
-  commandType: CommandType;
-  devices: Device[];
+  expectedResults: number;
+  receivedResults: ExecutionResult[];
+  resolve: (results: ExecutionResult[]) => void;
+  reject: (error: Error) => void;
+  timeout: NodeJS.Timeout;
 }
 
 export class TaskExecutor {
   private redis: Redis;
   private deviceManager: DeviceManager;
-  private workerClients: Map<number, WebSocket> = new Map();
+  private workerSender: WorkerSender | null = null;
+  private pendingTasks: Map<string, PendingTask> = new Map();
   
   // 커맨드 로테이션
   private commandRotation: CommandType[] = [
@@ -62,6 +69,32 @@ export class TaskExecutor {
   constructor(redisUrl: string, deviceManager: DeviceManager) {
     this.redis = new Redis(redisUrl);
     this.deviceManager = deviceManager;
+  }
+
+  /**
+   * 워커 전송 함수 설정
+   */
+  setWorkerSender(sender: WorkerSender): void {
+    this.workerSender = sender;
+  }
+
+  /**
+   * 작업 결과 처리 (WebSocket에서 호출)
+   */
+  async handleTaskResults(taskId: string, results: ExecutionResult[]): Promise<void> {
+    const pending = this.pendingTasks.get(taskId);
+    if (!pending) {
+      console.warn(`작업 결과를 받았지만 대기 중인 작업이 없음: ${taskId}`);
+      return;
+    }
+
+    pending.receivedResults.push(...results);
+
+    if (pending.receivedResults.length >= pending.expectedResults) {
+      clearTimeout(pending.timeout);
+      this.pendingTasks.delete(taskId);
+      pending.resolve(pending.receivedResults);
+    }
   }
 
   /**
@@ -136,20 +169,24 @@ export class TaskExecutor {
     // 병렬로 워커에 작업 전송
     const promises: Promise<ExecutionResult[]>[] = [];
 
-    if (worker1Devices.length > 0) {
+    if (worker1Devices.length > 0 && this.workerSender) {
       promises.push(this.sendToWorker(1, {
         taskId,
         commandType: task.commandType,
-        devices: worker1Devices
+        deviceSerials: worker1Devices.map(d => d.deviceId)
       }));
     }
 
-    if (worker2Devices.length > 0) {
+    if (worker2Devices.length > 0 && this.workerSender) {
       promises.push(this.sendToWorker(2, {
         taskId,
         commandType: task.commandType,
-        devices: worker2Devices
+        deviceSerials: worker2Devices.map(d => d.deviceId)
       }));
+    }
+
+    if (promises.length === 0) {
+      throw new Error('연결된 워커가 없습니다');
     }
 
     // 모든 워커 결과 대기
@@ -188,38 +225,42 @@ export class TaskExecutor {
   /**
    * 워커에 작업 전송
    */
-  private async sendToWorker(workerId: number, request: WorkerRequest): Promise<ExecutionResult[]> {
-    // 실제 구현에서는 WebSocket 또는 HTTP로 워커에 전송
-    // 여기서는 시뮬레이션
-    
-    const results: ExecutionResult[] = [];
-    
-    for (const device of request.devices) {
-      // 실제로는 워커가 ADB 명령 실행 후 결과 반환
-      const startTime = Date.now();
-      
-      try {
-        // TODO: 실제 워커 통신 구현
-        // const response = await this.workerClients.get(workerId)?.send(request);
-        
-        results.push({
-          taskId: request.taskId,
-          deviceId: device.id,
-          success: true,
-          durationMs: Date.now() - startTime
-        });
-      } catch (error) {
-        results.push({
-          taskId: request.taskId,
-          deviceId: device.id,
-          success: false,
-          durationMs: Date.now() - startTime,
-          errorMessage: error instanceof Error ? error.message : '알 수 없는 오류'
-        });
-      }
+  private async sendToWorker(
+    workerId: number, 
+    request: { taskId: string; commandType: CommandType; deviceSerials: string[] }
+  ): Promise<ExecutionResult[]> {
+    if (!this.workerSender) {
+      throw new Error('워커 전송 함수가 설정되지 않았습니다');
     }
-    
-    return results;
+
+    // 워커에 메시지 전송
+    const sent = this.workerSender(workerId, {
+      type: 'execute',
+      taskId: request.taskId,
+      commandType: request.commandType,
+      devices: request.deviceSerials
+    });
+
+    if (!sent) {
+      throw new Error(`워커 #${workerId}에 연결할 수 없습니다`);
+    }
+
+    // 결과 대기 (Promise)
+    return new Promise<ExecutionResult[]>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        this.pendingTasks.delete(request.taskId);
+        reject(new Error(`작업 타임아웃: ${request.taskId}`));
+      }, 5 * 60 * 1000); // 5분 타임아웃
+
+      this.pendingTasks.set(request.taskId, {
+        taskId: request.taskId,
+        expectedResults: request.deviceSerials.length,
+        receivedResults: [],
+        resolve,
+        reject,
+        timeout
+      });
+    });
   }
 
   /**
